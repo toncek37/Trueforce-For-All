@@ -40,6 +40,17 @@ namespace TrueforceForAll.Core
             _log = log ?? (_ => { });
         }
 
+        /// <summary>
+        /// Initializes the Logitech Steering Wheel SDK and selects the first
+        /// connected Logitech force-feedback controller. This is deliberately
+        /// capability based rather than model-number based so G29 and G920 can
+        /// share the same path.
+        ///
+        /// Logitech ships two initialization entry points. The simple one is
+        /// tried first; if it refuses to initialize we retry with an HWND. A
+        /// caller may supply the host window explicitly (useful from SimHub),
+        /// otherwise we resolve a console/active/foreground window best-effort.
+        /// </summary>
         public bool TryInitialize(IntPtr ownerWindow = default(IntPtr))
         {
             ThrowIfDisposed();
@@ -49,6 +60,8 @@ namespace TrueforceForAll.Core
             {
                 TryPreloadSdk();
 
+                // FS/SimHub primarily sees DirectInput wheels. Ignoring XInput
+                // controllers avoids accidentally selecting an unrelated pad.
                 bool initialized = Native.LogiSteeringInitialize(true);
                 if (!initialized)
                 {
@@ -79,6 +92,10 @@ namespace TrueforceForAll.Core
                     if (!Native.LogiHasForceFeedback(i)) continue;
 
                     _index = i;
+                    // Do not call LogiGetFriendlyProductName here. Logitech shipped
+                    // multiple incompatible signatures for that helper across SDK
+                    // revisions; calling the wrong form can raise AccessViolation.
+                    // Device identity is not needed for FFB operation.
                     _log($"[LegacyLogitechFFB] Connected to FFB controller {i}.");
                     return true;
                 }
@@ -113,6 +130,10 @@ namespace TrueforceForAll.Core
             }
         }
 
+        /// <summary>
+        /// Pumps the Logitech SDK. Call regularly from the plugin update loop.
+        /// Returns false if the selected controller is no longer connected.
+        /// </summary>
         public bool Update()
         {
             if (!IsReady || _disposed) return false;
@@ -128,6 +149,11 @@ namespace TrueforceForAll.Core
             }
         }
 
+        /// <summary>
+        /// Sends a signed constant steering force in the Logitech SDK range
+        /// [-100, 100]. Positive/negative polarity can be inverted by the
+        /// caller once the G29 hardware test establishes the desired sign.
+        /// </summary>
         public bool SetConstantForce(int percent)
         {
             if (!IsReady || _disposed) return false;
@@ -149,6 +175,10 @@ namespace TrueforceForAll.Core
             }
         }
 
+        /// <summary>
+        /// Adds viscous resistance. Logitech expects coefficient [0, 100].
+        /// Useful for hydraulic steering weight at very low vehicle speed.
+        /// </summary>
         public bool SetDamper(int coefficientPercent)
         {
             if (!IsReady || _disposed) return false;
@@ -170,6 +200,10 @@ namespace TrueforceForAll.Core
             }
         }
 
+        /// <summary>
+        /// Configures a centering spring. Offset is [-100,100], saturation and
+        /// coefficient are [0,100]. Passing coefficient 0 stops the spring.
+        /// </summary>
         public bool SetSpring(int offsetPercent, int saturationPercent, int coefficientPercent)
         {
             if (!IsReady || _disposed) return false;
@@ -228,6 +262,12 @@ namespace TrueforceForAll.Core
             _disposed = true;
         }
 
+        /// <summary>
+        /// Preload the x86 Logitech Steering Wheel SDK from LGS. DllImport then
+        /// binds to the already-loaded module by basename. The explicit
+        /// TF4ALL_LOGITECH_SDK environment variable is useful for developers;
+        /// it can point either at the DLL itself or at its containing folder.
+        /// </summary>
         private void TryPreloadSdk()
         {
             if (_sdkModule != IntPtr.Zero) return;
@@ -280,6 +320,8 @@ namespace TrueforceForAll.Core
 
         private static IntPtr ResolveOwnerWindow()
         {
+            // Console probe first; WPF/WinForms hosts generally have an active
+            // or foreground window even though GetConsoleWindow is zero.
             IntPtr hwnd = Native.GetConsoleWindow();
             if (hwnd != IntPtr.Zero) return hwnd;
             hwnd = Native.GetActiveWindow();
@@ -305,6 +347,8 @@ namespace TrueforceForAll.Core
 
         private static class Native
         {
+            // The SDK examples import "LogitechSteeringWheel"; Windows adds
+            // the .dll suffix automatically. Use cdecl as specified by the SDK.
             private const string DllName = "LogitechSteeringWheel";
 
             [DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -323,41 +367,53 @@ namespace TrueforceForAll.Core
             [DllImport("user32")]
             internal static extern IntPtr GetForegroundWindow();
 
-            // Match Logitech's own C# SDK binding exactly: plain bool marshaling.
-            [DllImport(DllName, CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
-            internal static extern bool LogiSteeringInitialize(bool ignoreXInputControllers);
+            [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
+            internal static extern bool LogiSteeringInitialize([MarshalAs(UnmanagedType.I1)] bool ignoreXInputControllers);
 
-            [DllImport(DllName, CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
-            internal static extern bool LogiSteeringInitializeWithWindow(bool ignoreXInputControllers, IntPtr windowHandle);
+            [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
+            internal static extern bool LogiSteeringInitializeWithWindow(
+                [MarshalAs(UnmanagedType.I1)] bool ignoreXInputControllers,
+                IntPtr windowHandle);
 
-            [DllImport(DllName, CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+            [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
             internal static extern bool LogiUpdate();
 
-            [DllImport(DllName, CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+            [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
             internal static extern bool LogiIsConnected(int index);
 
-            [DllImport(DllName, CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+            [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
             internal static extern bool LogiHasForceFeedback(int index);
 
-            [DllImport(DllName, CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+            [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
             internal static extern bool LogiPlayConstantForce(int index, int magnitudePercentage);
 
-            [DllImport(DllName, CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+            [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
             internal static extern bool LogiStopConstantForce(int index);
 
-            [DllImport(DllName, CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+            [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
             internal static extern bool LogiPlaySpringForce(int index, int offsetPercentage, int saturationPercentage, int coefficientPercentage);
 
-            [DllImport(DllName, CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+            [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
             internal static extern bool LogiStopSpringForce(int index);
 
-            [DllImport(DllName, CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+            [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
             internal static extern bool LogiPlayDamperForce(int index, int coefficientPercentage);
 
-            [DllImport(DllName, CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+            [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
             internal static extern bool LogiStopDamperForce(int index);
 
-            [DllImport(DllName, CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+            [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
             internal static extern void LogiSteeringShutdown();
         }
     }
