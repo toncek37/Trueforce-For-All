@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 
 namespace TrueforceForAll.Core
@@ -10,10 +11,11 @@ namespace TrueforceForAll.Core
     /// has to be sent through Logitech's classic Steering Wheel SDK.
     ///
     /// The native Logitech SDK DLL is intentionally not redistributed by this
-    /// project. The loader resolves it at runtime from the process DLL search
-    /// path (normally next to SimHub.exe / the plugin, or another location
-    /// added by the user). Missing SDK files therefore disable this backend
-    /// cleanly without affecting Trueforce wheels.
+    /// project. Before the first P/Invoke we try to preload the x86 SDK from
+    /// the normal Logitech Gaming Software install locations. This matters for
+    /// SimHub because its 32-bit process does not normally search LGS's SDK
+    /// subdirectory. Missing SDK files disable this backend cleanly without
+    /// affecting Trueforce wheels.
     /// </summary>
     public sealed class LegacyLogitechFfbOutput : IDisposable
     {
@@ -23,6 +25,7 @@ namespace TrueforceForAll.Core
         private int _index = -1;
         private bool _sdkInitialized;
         private bool _disposed;
+        private IntPtr _sdkModule;
         private int _lastConstantForce = int.MinValue;
         private int _lastDamper = int.MinValue;
         private int _lastSpringOffset = int.MinValue;
@@ -50,6 +53,8 @@ namespace TrueforceForAll.Core
 
             try
             {
+                TryPreloadSdk();
+
                 // FS/SimHub primarily sees DirectInput wheels. Ignoring XInput
                 // controllers avoids accidentally selecting an unrelated pad.
                 if (!Native.LogiSteeringInitialize(true))
@@ -226,7 +231,68 @@ namespace TrueforceForAll.Core
             if (_disposed) return;
             StopAll();
             ShutdownSdk();
+            if (_sdkModule != IntPtr.Zero)
+            {
+                try { Native.FreeLibrary(_sdkModule); } catch { }
+                _sdkModule = IntPtr.Zero;
+            }
             _disposed = true;
+        }
+
+        /// <summary>
+        /// Preload the x86 Logitech Steering Wheel SDK from LGS. DllImport then
+        /// binds to the already-loaded module by basename. The explicit
+        /// TF4ALL_LOGITECH_SDK environment variable is useful for developers;
+        /// it can point either at the DLL itself or at its containing folder.
+        /// </summary>
+        private void TryPreloadSdk()
+        {
+            if (_sdkModule != IntPtr.Zero) return;
+
+            string explicitPath = Environment.GetEnvironmentVariable("TF4ALL_LOGITECH_SDK");
+            string programW6432 = Environment.GetEnvironmentVariable("ProgramW6432");
+            string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            string programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+
+            string[] candidates =
+            {
+                ExpandSdkCandidate(explicitPath),
+                CombineSdkPath(programW6432),
+                CombineSdkPath(programFiles),
+                CombineSdkPath(programFilesX86),
+            };
+
+            foreach (string path in candidates)
+            {
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) continue;
+                IntPtr h = Native.LoadLibrary(path);
+                if (h == IntPtr.Zero)
+                {
+                    int err = Marshal.GetLastWin32Error();
+                    _log($"[LegacyLogitechFFB] Found Logitech SDK at '{path}', but LoadLibrary failed (Win32 {err}).");
+                    continue;
+                }
+
+                _sdkModule = h;
+                _log($"[LegacyLogitechFFB] Loaded Logitech Steering Wheel SDK: {path}");
+                return;
+            }
+
+            _log("[LegacyLogitechFFB] Logitech SDK was not found in the standard LGS SteeringWheel\\x86 folders; falling back to the normal DLL search path.");
+        }
+
+        private static string ExpandSdkCandidate(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return null;
+            path = Environment.ExpandEnvironmentVariables(path.Trim().Trim('"'));
+            if (path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) return path;
+            return Path.Combine(path, "LogitechSteeringWheel.dll");
+        }
+
+        private static string CombineSdkPath(string programFilesRoot)
+        {
+            if (string.IsNullOrWhiteSpace(programFilesRoot)) return null;
+            return Path.Combine(programFilesRoot, "Logitech Gaming Software", "SDK", "SteeringWheel", "x86", "LogitechSteeringWheel.dll");
         }
 
         private void ShutdownSdk()
@@ -263,6 +329,13 @@ namespace TrueforceForAll.Core
             // The SDK examples import "LogitechSteeringWheel"; Windows adds
             // the .dll suffix automatically. Use cdecl as specified by the SDK.
             private const string DllName = "LogitechSteeringWheel";
+
+            [DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)]
+            internal static extern IntPtr LoadLibrary(string lpFileName);
+
+            [DllImport("kernel32", SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            internal static extern bool FreeLibrary(IntPtr hModule);
 
             [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
             [return: MarshalAs(UnmanagedType.I1)]
