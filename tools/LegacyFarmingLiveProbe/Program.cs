@@ -66,18 +66,19 @@ internal static class Program
         if (!output.TryInitialize(_sdkHost.Handle))
         {
             Console.WriteLine("FAILED: Logitech wheel could not be initialized.");
+            _quit = true;
             _sdkHost.Close();
             return 2;
         }
 
-        // Ensure monitor-only startup cannot leave a previous SDK effect active.
+        // Clear any stale SDK effects from an earlier probe. Monitor mode never starts effects after this.
         output.StopAll();
 
         if (enableOutput)
         {
             var model = new LegacyFarmingFfbModel
             {
-                MasterGain = 0.50, // conservative first-live-test cap
+                MasterGain = 0.50,
                 InvertForce = invert,
             };
             controller = new LegacyFarmingFfbController(output, model);
@@ -109,9 +110,8 @@ internal static class Program
                 catch { continue; }
 
                 Console.WriteLine("FS telemetry connected.");
-
                 using var reader = new StreamReader(pipe);
-                await RunConnected(reader, output, controller, enableOutput);
+                await RunConnected(reader, output, controller, enableOutput, invert);
 
                 controller?.Stop();
                 if (!_quit)
@@ -123,6 +123,7 @@ internal static class Program
             controller?.Stop();
             controller?.Dispose();
             output.StopAll();
+            _quit = true;
             _sdkHost?.Close();
             Application.DoEvents();
         }
@@ -131,17 +132,19 @@ internal static class Program
     }
 
     private static async Task RunConnected(StreamReader reader, LegacyLogitechFfbOutput output,
-                                           LegacyFarmingFfbController controller, bool enableOutput)
+                                           LegacyFarmingFfbController controller, bool enableOutput, bool invert)
     {
         long lastPrint = 0;
         long lastSteerTicks = 0;
         double lastSteer = 0;
         bool forcesStoppedForStall = false;
+        var previewModel = controller?.Model ?? new LegacyFarmingFfbModel { MasterGain = 0.50, InvertForce = invert };
 
         while (!_quit)
         {
             Application.DoEvents();
 
+            long readStarted = Stopwatch.GetTimestamp();
             Task<string> readTask = reader.ReadLineAsync();
             while (!_quit && !readTask.IsCompleted)
             {
@@ -149,7 +152,8 @@ internal static class Program
                 Task winner = await Task.WhenAny(readTask, Task.Delay(50));
                 if (winner == readTask) break;
 
-                if (enableOutput && !forcesStoppedForStall && Stopwatch.GetTimestamp() - lastPrint > Stopwatch.Frequency * 3 / 10)
+                double waitingSeconds = (Stopwatch.GetTimestamp() - readStarted) / (double)Stopwatch.Frequency;
+                if (enableOutput && !forcesStoppedForStall && waitingSeconds >= 0.30)
                 {
                     controller?.Stop();
                     forcesStoppedForStall = true;
@@ -211,7 +215,6 @@ internal static class Program
                 Airborne = s.Airborne,
             };
 
-            var previewModel = controller?.Model ?? new LegacyFarmingFfbModel { MasterGain = 0.50, InvertForce = invert: false };
             var cmd = previewModel.Evaluate(input);
 
             if (enableOutput)
