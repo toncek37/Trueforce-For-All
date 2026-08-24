@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Standalone hardware probe for legacy Logitech wheels (G29/G920).
+       Deliberately NOT in the solution so it cannot perturb the SimHub build.
+       Must run x86 because LGS ships the SteeringWheel SDK DLL in x86 form. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x86</PlatformTarget>
+    <Prefer32Bit>true</Prefer32Bit>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>LegacyLogitechProbe</AssemblyName>
+    <RootNamespace>TrueforceForAll.Tools.LegacyLogitechProbe</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\TrueforceForAll.Core\TrueforceForAll.Core.csproj" />
+  </ItemGroup>
+
+</Project>
