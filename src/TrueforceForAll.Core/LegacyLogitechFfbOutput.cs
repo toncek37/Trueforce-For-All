@@ -45,8 +45,13 @@ namespace TrueforceForAll.Core
         /// connected Logitech force-feedback controller. This is deliberately
         /// capability based rather than model-number based so G29 and G920 can
         /// share the same path.
+        ///
+        /// Logitech ships two initialization entry points. The simple one is
+        /// tried first; if it refuses to initialize we retry with an HWND. A
+        /// caller may supply the host window explicitly (useful from SimHub),
+        /// otherwise we resolve a console/active/foreground window best-effort.
         /// </summary>
-        public bool TryInitialize()
+        public bool TryInitialize(IntPtr ownerWindow = default(IntPtr))
         {
             ThrowIfDisposed();
             if (IsReady) return true;
@@ -57,11 +62,26 @@ namespace TrueforceForAll.Core
 
                 // FS/SimHub primarily sees DirectInput wheels. Ignoring XInput
                 // controllers avoids accidentally selecting an unrelated pad.
-                if (!Native.LogiSteeringInitialize(true))
+                bool initialized = Native.LogiSteeringInitialize(true);
+                if (!initialized)
                 {
-                    _log("[LegacyLogitechFFB] LogiSteeringInitialize returned false.");
-                    return false;
+                    _log("[LegacyLogitechFFB] LogiSteeringInitialize returned false; trying LogiSteeringInitializeWithWindow fallback.");
+                    IntPtr hwnd = ownerWindow != IntPtr.Zero ? ownerWindow : ResolveOwnerWindow();
+                    if (hwnd != IntPtr.Zero)
+                    {
+                        initialized = Native.LogiSteeringInitializeWithWindow(true, hwnd);
+                        _log(initialized
+                            ? $"[LegacyLogitechFFB] LogiSteeringInitializeWithWindow succeeded (HWND 0x{hwnd.ToInt64():X})."
+                            : $"[LegacyLogitechFFB] LogiSteeringInitializeWithWindow returned false (HWND 0x{hwnd.ToInt64():X}).");
+                    }
+                    else
+                    {
+                        _log("[LegacyLogitechFFB] No usable owner window was available for the WithWindow fallback.");
+                    }
                 }
+
+                if (!initialized)
+                    return false;
 
                 _sdkInitialized = true;
                 Native.LogiUpdate();
@@ -295,6 +315,17 @@ namespace TrueforceForAll.Core
             return Path.Combine(programFilesRoot, "Logitech Gaming Software", "SDK", "SteeringWheel", "x86", "LogitechSteeringWheel.dll");
         }
 
+        private static IntPtr ResolveOwnerWindow()
+        {
+            // Console probe first; WPF/WinForms hosts generally have an active
+            // or foreground window even though GetConsoleWindow is zero.
+            IntPtr hwnd = Native.GetConsoleWindow();
+            if (hwnd != IntPtr.Zero) return hwnd;
+            hwnd = Native.GetActiveWindow();
+            if (hwnd != IntPtr.Zero) return hwnd;
+            return Native.GetForegroundWindow();
+        }
+
         private void ShutdownSdk()
         {
             _index = -1;
@@ -337,9 +368,24 @@ namespace TrueforceForAll.Core
             [return: MarshalAs(UnmanagedType.Bool)]
             internal static extern bool FreeLibrary(IntPtr hModule);
 
+            [DllImport("kernel32")]
+            internal static extern IntPtr GetConsoleWindow();
+
+            [DllImport("user32")]
+            internal static extern IntPtr GetActiveWindow();
+
+            [DllImport("user32")]
+            internal static extern IntPtr GetForegroundWindow();
+
             [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
             [return: MarshalAs(UnmanagedType.I1)]
             internal static extern bool LogiSteeringInitialize([MarshalAs(UnmanagedType.I1)] bool ignoreXInputControllers);
+
+            [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
+            internal static extern bool LogiSteeringInitializeWithWindow(
+                [MarshalAs(UnmanagedType.I1)] bool ignoreXInputControllers,
+                IntPtr windowHandle);
 
             [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
             [return: MarshalAs(UnmanagedType.I1)]
