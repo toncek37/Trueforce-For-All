@@ -13,7 +13,7 @@ internal static class Program
         Console.WriteLine("G29/G920 classic Logitech Steering Wheel SDK test");
         Console.WriteLine();
         Console.WriteLine("IMPORTANT: keep hands clear enough that the wheel can move a little.");
-        Console.WriteLine("The test uses only low forces (20%) and stops every effect on exit.");
+        Console.WriteLine("The test uses only low forces and stops every effect on exit.");
         Console.WriteLine("Close Farming Simulator and G HUB before testing. LGS may remain installed.");
         Console.WriteLine();
 
@@ -27,15 +27,18 @@ internal static class Program
                 Console.WriteLine();
                 Console.WriteLine("FAILED: no usable Logitech FFB wheel was opened.");
                 Console.WriteLine("Check that the G29 is connected in PS4 mode and visible in joy.cpl.");
-                Console.WriteLine("Expected SDK path:");
-                Console.WriteLine(@"  C:\Program Files\Logitech Gaming Software\SDK\SteeringWheel\x86\LogitechSteeringWheel.dll");
                 return 2;
             }
 
             Console.WriteLine();
             Console.WriteLine($"Opened controller index {ffb.ControllerIndex}.");
-            Console.WriteLine("Press ENTER to run the low-force polarity test, or Q to quit.");
+            Console.WriteLine("Press ENTER to run the independent effect test, or Q to quit.");
             if (ReadQuit()) return 0;
+
+            bool constantPlus = false;
+            bool constantMinus = false;
+            bool spring = false;
+            bool damper = false;
 
             try
             {
@@ -43,38 +46,54 @@ internal static class Program
 
                 Console.WriteLine();
                 Console.WriteLine("1/4: +20% constant force for 0.7 s");
-                if (!ffb.SetConstantForce(+20)) return WriteFail("constant +20");
-                if (!Pump(ffb, 700)) return Disconnect();
-                ffb.SetConstantForce(0);
+                constantPlus = ffb.SetConstantForce(+20);
+                Console.WriteLine(constantPlus ? "  SDK: ACCEPTED" : "  SDK: REJECTED");
+                if (constantPlus)
+                {
+                    if (!Pump(ffb, 700)) return Disconnect();
+                    ffb.SetConstantForce(0);
+                }
                 Pump(ffb, 350);
 
                 Console.WriteLine("2/4: -20% constant force for 0.7 s");
-                if (!ffb.SetConstantForce(-20)) return WriteFail("constant -20");
-                if (!Pump(ffb, 700)) return Disconnect();
-                ffb.SetConstantForce(0);
+                constantMinus = ffb.SetConstantForce(-20);
+                Console.WriteLine(constantMinus ? "  SDK: ACCEPTED" : "  SDK: REJECTED");
+                if (constantMinus)
+                {
+                    if (!Pump(ffb, 700)) return Disconnect();
+                    ffb.SetConstantForce(0);
+                }
                 Pump(ffb, 350);
 
                 Console.WriteLine("3/4: 25% centering spring for 1.0 s");
-                if (!ffb.SetSpring(0, 100, 25)) return WriteFail("spring");
-                if (!Pump(ffb, 1000)) return Disconnect();
-                ffb.SetSpring(0, 0, 0);
+                spring = ffb.SetSpring(0, 100, 25);
+                Console.WriteLine(spring ? "  SDK: ACCEPTED" : "  SDK: REJECTED");
+                if (spring)
+                {
+                    if (!Pump(ffb, 1000)) return Disconnect();
+                    ffb.SetSpring(0, 0, 0);
+                }
                 Pump(ffb, 350);
 
-                Console.WriteLine("4/4: 25% damper for 1.0 s - turn the wheel by hand");
-                if (!ffb.SetDamper(25)) return WriteFail("damper");
-                if (!Pump(ffb, 1000)) return Disconnect();
-                ffb.SetDamper(0);
+                Console.WriteLine("4/4: 25% damper for 1.5 s - turn the wheel by hand");
+                damper = ffb.SetDamper(25);
+                Console.WriteLine(damper ? "  SDK: ACCEPTED" : "  SDK: REJECTED");
+                if (damper)
+                {
+                    if (!Pump(ffb, 1500)) return Disconnect();
+                    ffb.SetDamper(0);
+                }
                 Pump(ffb, 200);
 
                 ffb.StopAll();
                 Console.WriteLine();
-                Console.WriteLine("TEST COMPLETE.");
-                Console.WriteLine("Please note:");
-                Console.WriteLine("  - which direction +20% pulled the wheel");
-                Console.WriteLine("  - whether -20% pulled the opposite way");
-                Console.WriteLine("  - whether the spring centered the wheel");
-                Console.WriteLine("  - whether the damper made manual turning heavier");
+                Console.WriteLine("RESULTS");
+                Console.WriteLine($"  constant +20 : {(constantPlus ? "ACCEPTED" : "REJECTED")}");
+                Console.WriteLine($"  constant -20 : {(constantMinus ? "ACCEPTED" : "REJECTED")}");
+                Console.WriteLine($"  spring       : {(spring ? "ACCEPTED" : "REJECTED")}");
+                Console.WriteLine($"  damper       : {(damper ? "ACCEPTED" : "REJECTED")}");
                 Console.WriteLine();
+                Console.WriteLine("Also note what you physically felt for every ACCEPTED effect.");
                 Console.WriteLine("Press ENTER to exit.");
                 Console.ReadLine();
                 return 0;
@@ -146,11 +165,5 @@ internal static class Program
     {
         Console.WriteLine("FAILED: wheel disconnected or Logitech SDK update failed.");
         return 3;
-    }
-
-    private static int WriteFail(string effect)
-    {
-        Console.WriteLine($"FAILED: Logitech SDK rejected {effect} effect.");
-        return 4;
     }
 }
