@@ -17,10 +17,12 @@ internal static class Program
         Console.WriteLine("Close Farming Simulator and G HUB before testing. LGS may remain installed.");
         Console.WriteLine();
 
+        using (var ownerWindow = new NativeOwnerWindow())
         using (var ffb = new LegacyLogitechFfbOutput(Console.WriteLine))
         {
+            Console.WriteLine($"Created process-owned SDK window: HWND 0x{ownerWindow.Handle.ToInt64():X}");
             Console.WriteLine("Initializing Logitech SDK...");
-            if (!ffb.TryInitialize())
+            if (!ffb.TryInitialize(ownerWindow.Handle))
             {
                 Console.WriteLine();
                 Console.WriteLine("FAILED: no usable Logitech FFB wheel was opened.");
