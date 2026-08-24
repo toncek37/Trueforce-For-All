@@ -12,6 +12,7 @@
     <Nullable>disable</Nullable>
     <AssemblyName>LegacyLogitechProbe</AssemblyName>
     <RootNamespace>TrueforceForAll.Tools.LegacyLogitechProbe</RootNamespace>
+    <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
 
   <ItemGroup>
