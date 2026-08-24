@@ -1,13 +1,19 @@
 using System;
+using System.Drawing;
 using System.Threading;
+using System.Windows.Forms;
 using TrueforceForAll.Core;
 
 internal static class Program
 {
+    [STAThread]
     private static int Main(string[] args)
     {
         if (args.Length > 0 && string.Equals(args[0], "--dry-run", StringComparison.OrdinalIgnoreCase))
             return RunModelDryRun();
+
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
 
         Console.WriteLine("Trueforce For All - Legacy Logitech FFB probe");
         Console.WriteLine("G29/G920 classic Logitech Steering Wheel SDK test");
@@ -17,18 +23,27 @@ internal static class Program
         Console.WriteLine("Close Farming Simulator and G HUB before testing. LGS may remain installed.");
         Console.WriteLine();
 
-        using (var ownerWindow = new NativeOwnerWindow())
+        using (var ownerWindow = CreateSdkHostWindow())
         using (var ffb = new LegacyLogitechFfbOutput(Console.WriteLine))
         {
-            Console.WriteLine($"Created process-owned SDK window: HWND 0x{ownerWindow.Handle.ToInt64():X}");
+            ownerWindow.Show();
+            ownerWindow.Activate();
+            ownerWindow.BringToFront();
+            Application.DoEvents();
+
+            Console.WriteLine($"Created visible process-owned SDK window: HWND 0x{ownerWindow.Handle.ToInt64():X}");
+            Console.WriteLine("Keep the small 'TF4ALL Logitech SDK Host' window open during this test.");
             Console.WriteLine("Initializing Logitech SDK...");
             if (!ffb.TryInitialize(ownerWindow.Handle))
             {
                 Console.WriteLine();
                 Console.WriteLine("FAILED: no usable Logitech FFB wheel was opened.");
-                Console.WriteLine("Check that the G29 is connected in PS4 mode and visible in joy.cpl.");
+                Console.WriteLine("Check that the G29 is connected and visible in joy.cpl.");
                 return 2;
             }
+
+            PumpUi(250);
+            ffb.Update();
 
             Console.WriteLine();
             Console.WriteLine($"Opened controller index {ffb.ControllerIndex}.");
@@ -58,6 +73,17 @@ internal static class Program
             Console.WriteLine("Press ENTER to run the independent effect test, or Q to quit.");
             if (ReadQuit()) return 0;
 
+            // DirectInput/Logitech SDK often ties FFB acquisition to the owner
+            // window. Bring our real WinForms window to the foreground before
+            // starting effects and keep pumping its Windows message queue.
+            ownerWindow.Show();
+            ownerWindow.WindowState = FormWindowState.Normal;
+            ownerWindow.Activate();
+            ownerWindow.BringToFront();
+            Application.DoEvents();
+            Thread.Sleep(100);
+            Application.DoEvents();
+
             bool constantPlus = false;
             bool constantMinus = false;
             bool spring = false;
@@ -65,7 +91,7 @@ internal static class Program
 
             try
             {
-                if (!Pump(ffb, 150)) return Disconnect();
+                if (!Pump(ffb, 250)) return Disconnect();
 
                 Console.WriteLine();
                 Console.WriteLine("1/4: +20% constant force for 0.7 s");
@@ -128,6 +154,20 @@ internal static class Program
         }
     }
 
+    private static Form CreateSdkHostWindow()
+    {
+        return new Form
+        {
+            Text = "TF4ALL Logitech SDK Host",
+            StartPosition = FormStartPosition.CenterScreen,
+            ClientSize = new Size(420, 90),
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            TopMost = true,
+        };
+    }
+
     private static int RunModelDryRun()
     {
         Console.WriteLine("Trueforce For All - FS legacy FFB model dry-run");
@@ -164,12 +204,27 @@ internal static class Program
         int left = milliseconds;
         while (left > 0)
         {
+            Application.DoEvents();
             if (!ffb.Update()) return false;
             int delay = Math.Min(StepMs, left);
             Thread.Sleep(delay);
             left -= delay;
         }
+        Application.DoEvents();
         return true;
+    }
+
+    private static void PumpUi(int milliseconds)
+    {
+        const int StepMs = 10;
+        int left = milliseconds;
+        while (left > 0)
+        {
+            Application.DoEvents();
+            int delay = Math.Min(StepMs, left);
+            Thread.Sleep(delay);
+            left -= delay;
+        }
     }
 
     private static bool ReadQuit()
