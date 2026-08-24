@@ -6,6 +6,9 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
+        if (args.Length > 0 && string.Equals(args[0], "--dry-run", StringComparison.OrdinalIgnoreCase))
+            return RunModelDryRun();
+
         Console.WriteLine("Trueforce For All - Legacy Logitech FFB probe");
         Console.WriteLine("G29/G920 classic Logitech Steering Wheel SDK test");
         Console.WriteLine();
@@ -34,8 +37,6 @@ internal static class Program
 
             try
             {
-                // Keep pumping the SDK between writes. Logitech's SDK is stateful;
-                // this also detects a disconnect before each force segment.
                 if (!Pump(ffb, 150)) return Disconnect();
 
                 Console.WriteLine();
@@ -81,6 +82,36 @@ internal static class Program
                 ffb.StopAll();
             }
         }
+    }
+
+    private static int RunModelDryRun()
+    {
+        Console.WriteLine("Trueforce For All - FS legacy FFB model dry-run");
+        Console.WriteLine("No wheel or Logitech SDK initialization is used.");
+        Console.WriteLine();
+
+        var model = new LegacyFarmingFfbModel();
+        double[] speeds = { 0, 5, 15, 40 };
+        foreach (double speed in speeds)
+        {
+            var cmd = model.Evaluate(new LegacyFarmingFfbModel.Input
+            {
+                SpeedKmh = speed,
+                SteeringNorm = 0.40,
+                SteeringVelocity = 0.0,
+                MotorLoad01 = 0.5,
+                TowedMassKg = 3000,
+                AttachedFill01 = 0.5,
+                WheelSlip01 = 0.0,
+                Airborne = false,
+            });
+
+            Console.WriteLine($"{speed,4:0} km/h : constant={cmd.ConstantForce,4}%  spring={cmd.SpringCoefficient,3}%  damper={cmd.DamperCoefficient,3}%");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("Expected trend: heavy scrub/damping at 0 km/h, less constant force as speed rises, stronger self-centering spring at road speed.");
+        return 0;
     }
 
     private static bool Pump(LegacyLogitechFfbOutput ffb, int milliseconds)
