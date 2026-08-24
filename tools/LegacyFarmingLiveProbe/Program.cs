@@ -4,15 +4,17 @@ using System.IO;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Text.Json;
-using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 using TrueforceForAll.Core;
 
 internal static class Program
 {
     private const string PipeName = "TF4ALLTelemetry";
     private static volatile bool _quit;
+    private static Form _sdkHost;
 
+    [STAThread]
     private static async Task<int> Main(string[] args)
     {
         bool enableOutput = HasArg(args, "--enable-output");
@@ -27,24 +29,52 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine(enableOutput
             ? "OUTPUT ENABLED: forces will be sent to the wheel."
-            : "MONITOR ONLY: no forces will be sent. Add --enable-output after hardware probe passes.");
+            : "MONITOR ONLY: Logitech SDK is opened only to read wheel position; no active FFB effects are generated.");
         if (invert) Console.WriteLine("Constant-force polarity inversion ENABLED.");
         Console.WriteLine("Ctrl+C exits and stops all effects.");
         Console.WriteLine();
 
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; _quit = true; };
 
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        _sdkHost = new Form
+        {
+            Text = "TF4ALL Logitech SDK Host",
+            Width = 360,
+            Height = 110,
+            StartPosition = FormStartPosition.CenterScreen,
+            TopMost = true,
+        };
+        _sdkHost.FormClosing += (_, e) =>
+        {
+            if (!_quit)
+            {
+                e.Cancel = true;
+                _sdkHost.Hide();
+            }
+        };
+        _sdkHost.Show();
+        _sdkHost.Activate();
+        Application.DoEvents();
+
         using var output = new LegacyLogitechFfbOutput(Console.WriteLine);
         LegacyFarmingFfbController controller = null;
 
+        Console.WriteLine($"Created visible process-owned SDK window: HWND 0x{_sdkHost.Handle.ToInt64():X}");
+        Console.WriteLine("Initializing Logitech wheel for steering input...");
+        if (!output.TryInitialize(_sdkHost.Handle))
+        {
+            Console.WriteLine("FAILED: Logitech wheel could not be initialized.");
+            _sdkHost.Close();
+            return 2;
+        }
+
+        // Ensure monitor-only startup cannot leave a previous SDK effect active.
+        output.StopAll();
+
         if (enableOutput)
         {
-            Console.WriteLine("Initializing Logitech wheel...");
-            if (!output.TryInitialize())
-            {
-                Console.WriteLine("FAILED: Logitech wheel could not be initialized. No output was enabled.");
-                return 2;
-            }
             var model = new LegacyFarmingFfbModel
             {
                 MasterGain = 0.50, // conservative first-live-test cap
@@ -52,8 +82,12 @@ internal static class Program
             };
             controller = new LegacyFarmingFfbController(output, model);
             Console.WriteLine("Wheel opened. First live run is capped at 50% model gain.");
-            Console.WriteLine();
         }
+        else
+        {
+            Console.WriteLine("Wheel opened for steering readback. FFB output remains disabled.");
+        }
+        Console.WriteLine();
 
         try
         {
@@ -64,8 +98,16 @@ internal static class Program
                     PipeName, PipeDirection.In, 1,
                     PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
 
-                await pipe.WaitForConnectionAsync();
+                Task waitTask = pipe.WaitForConnectionAsync();
+                while (!_quit && !waitTask.IsCompleted)
+                {
+                    Application.DoEvents();
+                    await Task.WhenAny(waitTask, Task.Delay(25));
+                }
                 if (_quit) break;
+                try { await waitTask; }
+                catch { continue; }
+
                 Console.WriteLine("FS telemetry connected.");
 
                 using var reader = new StreamReader(pipe);
@@ -81,6 +123,8 @@ internal static class Program
             controller?.Stop();
             controller?.Dispose();
             output.StopAll();
+            _sdkHost?.Close();
+            Application.DoEvents();
         }
 
         return 0;
@@ -96,13 +140,16 @@ internal static class Program
 
         while (!_quit)
         {
+            Application.DoEvents();
+
             Task<string> readTask = reader.ReadLineAsync();
             while (!_quit && !readTask.IsCompleted)
             {
-                Task winner = await Task.WhenAny(readTask, Task.Delay(300));
+                Application.DoEvents();
+                Task winner = await Task.WhenAny(readTask, Task.Delay(50));
                 if (winner == readTask) break;
 
-                if (enableOutput && !forcesStoppedForStall)
+                if (enableOutput && !forcesStoppedForStall && Stopwatch.GetTimestamp() - lastPrint > Stopwatch.Frequency * 3 / 10)
                 {
                     controller?.Stop();
                     forcesStoppedForStall = true;
@@ -128,18 +175,16 @@ internal static class Program
                 continue;
             }
 
-            double steer = 0;
-            bool haveSteer = false;
-            if (enableOutput)
+            if (!output.Update()) return;
+
+            double steer;
+            bool haveSteer = NativeWheel.TryGetSteeringNorm(output.ControllerIndex, out steer);
+            if (!haveSteer && enableOutput)
             {
-                if (!output.Update()) return;
-                haveSteer = NativeWheel.TryGetSteeringNorm(output.ControllerIndex, out steer);
-                if (!haveSteer)
-                {
-                    controller?.Stop();
-                    continue;
-                }
+                controller?.Stop();
+                continue;
             }
+            if (!haveSteer) steer = 0;
 
             double steerVel = 0;
             long now = Stopwatch.GetTimestamp();
@@ -166,7 +211,7 @@ internal static class Program
                 Airborne = s.Airborne,
             };
 
-            var previewModel = controller?.Model ?? new LegacyFarmingFfbModel { MasterGain = 0.50 };
+            var previewModel = controller?.Model ?? new LegacyFarmingFfbModel { MasterGain = 0.50, InvertForce = invert: false };
             var cmd = previewModel.Evaluate(input);
 
             if (enableOutput)
