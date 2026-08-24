@@ -92,8 +92,11 @@ namespace TrueforceForAll.Core
                     if (!Native.LogiHasForceFeedback(i)) continue;
 
                     _index = i;
-                    string name = TryGetFriendlyName(i);
-                    _log($"[LegacyLogitechFFB] Connected to controller {i}{(string.IsNullOrWhiteSpace(name) ? string.Empty : $" ({name})")}.");
+                    // Do not call LogiGetFriendlyProductName here. Logitech shipped
+                    // multiple incompatible signatures for that helper across SDK
+                    // revisions; calling the wrong form can raise AccessViolation.
+                    // Device identity is not needed for FFB operation.
+                    _log($"[LegacyLogitechFFB] Connected to FFB controller {i}.");
                     return true;
                 }
 
@@ -334,19 +337,6 @@ namespace TrueforceForAll.Core
             _sdkInitialized = false;
         }
 
-        private static string TryGetFriendlyName(int index)
-        {
-            try
-            {
-                IntPtr ptr = Native.LogiGetFriendlyProductName(index);
-                return ptr == IntPtr.Zero ? null : Marshal.PtrToStringAnsi(ptr);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
         private void ThrowIfDisposed()
         {
             if (_disposed) throw new ObjectDisposedException(nameof(LegacyLogitechFfbOutput));
@@ -398,9 +388,6 @@ namespace TrueforceForAll.Core
             [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
             [return: MarshalAs(UnmanagedType.I1)]
             internal static extern bool LogiHasForceFeedback(int index);
-
-            [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Unicode)]
-            internal static extern IntPtr LogiGetFriendlyProductName(int index);
 
             [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
             [return: MarshalAs(UnmanagedType.I1)]
