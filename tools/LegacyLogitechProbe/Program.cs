@@ -32,6 +32,29 @@ internal static class Program
 
             Console.WriteLine();
             Console.WriteLine($"Opened controller index {ffb.ControllerIndex}.");
+            Console.WriteLine($"Model check: G29={(ffb.IsModelConnected(LegacyLogitechFfbOutput.LogitechModelG29) ? "YES" : "NO")}, G920={(ffb.IsModelConnected(LegacyLogitechFfbOutput.LogitechModelG920) ? "YES" : "NO")}");
+
+            LegacyLogitechFfbOutput.ControllerProperties properties;
+            if (ffb.TryGetControllerProperties(out properties))
+            {
+                Console.WriteLine("Controller properties:");
+                Console.WriteLine($"  forceEnable          = {properties.ForceEnable}");
+                Console.WriteLine($"  overallGain          = {properties.OverallGain}");
+                Console.WriteLine($"  springGain           = {properties.SpringGain}");
+                Console.WriteLine($"  damperGain           = {properties.DamperGain}");
+                Console.WriteLine($"  defaultSpringEnabled = {properties.DefaultSpringEnabled}");
+                Console.WriteLine($"  defaultSpringGain    = {properties.DefaultSpringGain}");
+                Console.WriteLine($"  combinePedals        = {properties.CombinePedals}");
+                Console.WriteLine($"  wheelRange           = {properties.WheelRange}");
+                Console.WriteLine($"  gameSettingsEnabled  = {properties.GameSettingsEnabled}");
+                Console.WriteLine($"  allowGameSettings    = {properties.AllowGameSettings}");
+            }
+            else
+            {
+                Console.WriteLine("Controller properties: READ FAILED");
+            }
+
+            Console.WriteLine();
             Console.WriteLine("Press ENTER to run the independent effect test, or Q to quit.");
             if (ReadQuit()) return 0;
 
